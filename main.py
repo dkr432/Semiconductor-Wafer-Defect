@@ -144,4 +144,5 @@ with tab5:
                         width="stretch")
 
 with st.expander("결함 웨이퍼 원본 데이터"):
-    st.dataframe(df[df[LABEL] ==
+    st.dataframe(df[df[LABEL] == 1].drop(columns="상태"), hide_index=True,
+                 width="stretch")
