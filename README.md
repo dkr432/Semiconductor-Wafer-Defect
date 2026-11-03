@@ -9,4 +9,8 @@
 캐글 데이터 이름:Semiconductor Wafer Defect Classification Dataset
 - 기간·행 수·열 수:5000행 9열
 - 사용한 열:temperature_c (온도), pressure_torr (압력), gas_flow_sccm (가스 유량), etch_rate_nm_min (식각률), voltage_v (전압), current_ma (전류), defect_label (결함 여부)
+  
 - 개인 단위 정보 없음 확인: 예
+
+## 지표
+데이터에 불량인 데이터가 극히 적어서 재현율을 써서 실제 불량중 모델이 잡아낸 비율을 보겠다.
