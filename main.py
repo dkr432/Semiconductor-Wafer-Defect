@@ -1,174 +1,145 @@
 import os
-
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import plotly.express as px
 import streamlit as st
+from sklearn.metrics import roc_auc_score
 
-st.set_page_config(page_title="센서 비교", layout="wide")
+st.set_page_config(page_title="웨이퍼 결함 분석", layout="wide")
 
-LABEL = "defect_label"
-# (화면용 한글, 그래프용 영문)  ※ 그래프는 한글 폰트 문제를 피하려고 영문 사용
 SENSORS = {
-    "temperature_c": ("온도 (℃)", "Temperature (C)"),
-    "pressure_torr": ("압력 (torr)", "Pressure (torr)"),
-    "gas_flow_sccm": ("가스 유량 (sccm)", "Gas flow (sccm)"),
-    "etch_rate_nm_min": ("식각률 (nm/min)", "Etch rate (nm/min)"),
-    "voltage_v": ("전압 (V)", "Voltage (V)"),
-    "current_ma": ("전류 (mA)", "Current (mA)"),
+    "temperature_c": "온도 (℃)",
+    "pressure_torr": "압력 (torr)",
+    "gas_flow_sccm": "가스 유량 (sccm)",
+    "etch_rate_nm_min": "식각률 (nm/min)",
+    "voltage_v": "전압 (V)",
+    "current_ma": "전류 (mA)",
 }
-KO = {k: v[0] for k, v in SENSORS.items()}
-EN = {k: v[1] for k, v in SENSORS.items()}
-RED, BLUE, GRAY = "#E45756", "#4C78A8", "#9aa0a6"
+LABEL = "defect_label"
+COLORS = {"정상": "#4C78A8", "결함": "#E45756"}
+DEFAULT_FILE = os.path.join(os.path.dirname(__file__), "data", "semiconductor_wafer_defect_dataset_small.csv")
 
-path = os.path.join(os.path.dirname(__file__), "data",
-                    "semiconductor_wafer_defect_dataset_small.csv")
-df = pd.read_csv(path)
-y = df[LABEL].values == 1
-n, nd = len(df), int(y.sum())
 
-# ------------------------------------------------------------ 사이드바
-st.sidebar.header("센서 선택")
-sel = st.sidebar.multiselect("비교할 센서", list(SENSORS), default=list(SENSORS),
-                             format_func=KO.get)
-norm = st.sidebar.radio("값 맞추기 방식",
-                        ["z-score (평균 0, 표준편차 1)", "0~1 범위(min-max)"])
-st.sidebar.caption("센서마다 단위가 달라서, 서로 비교하려면 값을 같은 척도로 맞춰야 합니다.")
+@st.cache_data
+def load(src):
+    df = pd.read_csv(src)
+    df["상태"] = np.where(df[LABEL] == 1, "결함", "정상")
+    return df
 
-st.title("🔬 센서끼리 비교")
-st.markdown(f"웨이퍼 **{n:,}개** · 결함 **{nd}건** ({nd / n:.2%})")
-if nd < 30:
-    st.caption("⚠️ 결함이 적어서 그래프의 경향은 참고용입니다.")
 
-if not sel:
-    st.warning("왼쪽에서 비교할 센서를 1개 이상 선택하세요.")
+# ---------- 데이터 불러오기 ----------
+st.title("🔬 반도체 웨이퍼 센서 · 결함 분석")
+up = st.sidebar.file_uploader("CSV 업로드 (없으면 샘플 사용)", type="csv")
+if up is not None:
+    df = load(up)
+elif os.path.exists(DEFAULT_FILE):
+    df = load(DEFAULT_FILE)
+else:
+    st.info("왼쪽에서 CSV 파일을 업로드해 주세요.")
     st.stop()
 
+missing = [c for c in [*SENSORS, LABEL] if c not in df.columns]
+if missing:
+    st.error(f"필요한 열이 없습니다: {missing}")
+    st.stop()
 
-def scale(frame):
-    if norm.startswith("z"):
-        return (frame - df[list(SENSORS)].mean()) / df[list(SENSORS)].std()
-    lo, hi = df[list(SENSORS)].min(), df[list(SENSORS)].max()
-    return (frame - lo) / (hi - lo)
+# ---------- 필터 ----------
+st.sidebar.header("필터")
+if "process_step" in df.columns:
+    steps = sorted(df["process_step"].dropna().unique())
+    sel = st.sidebar.multiselect("공정 단계", steps, default=steps)
+    df = df[df["process_step"].isin(sel)]
+if df.empty:
+    st.warning("선택한 조건에 맞는 데이터가 없습니다.")
+    st.stop()
 
+n, nd = len(df), int(df[LABEL].sum())
+c1, c2, c3 = st.columns(3)
+c1.metric("웨이퍼 수", f"{n:,}")
+c2.metric("결함 수", f"{nd:,}")
+c3.metric("결함 비율", f"{nd / n:.2%}")
+if nd < 10:
+    st.caption("⚠️ 결함 샘플이 매우 적어 그래프의 경향은 참고용으로만 보세요.")
 
-Z = scale(df[list(SENSORS)])[sel]
-Z.columns = [EN[c] for c in sel]
-names = list(Z.columns)
-ylabel = "z-score" if norm.startswith("z") else "scaled value (0-1)"
-center = 0 if norm.startswith("z") else None
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
+    ["분포 비교", "박스플롯", "산점도", "압력 구간별 결함률", "센서 비교 · 상관"]
+)
 
-# ------------------------------------------------------------ 1. 정상 vs 결함
-st.header("1. 선택한 센서의 정상 vs 결함 분포")
-fig, ax = plt.subplots(figsize=(max(6, 1.6 * len(names) + 2), 4.5))
-pos = np.arange(len(names))
-ax.boxplot([Z.loc[~y, c] for c in names], positions=pos, widths=0.5,
-           showfliers=False, patch_artist=True,
-           boxprops=dict(facecolor="#dce6f2", edgecolor=BLUE),
-           medianprops=dict(color=BLUE), whiskerprops=dict(color=BLUE),
-           capprops=dict(color=BLUE))
-rng = np.random.default_rng(0)
-for i, c in enumerate(names):
-    ax.scatter(i + rng.uniform(-0.15, 0.15, nd), Z.loc[y, c], color=RED, s=45,
-               zorder=3, edgecolor="white", label="Defect wafer" if i == 0 else None)
-if center is not None:
-    ax.axhline(0, color="black", lw=0.8)
-ax.set_xticks(pos, names, rotation=15 if len(names) > 4 else 0)
-ax.set_ylabel(ylabel)
-ax.set_title("Normal wafers (box) vs defect wafers (red dots)")
-ax.legend(loc="best")
-fig.tight_layout()
-st.pyplot(fig)
-plt.close(fig)
-st.caption("파란 상자는 정상 웨이퍼, 빨간 점은 결함 웨이퍼 각각의 값입니다.")
+# ---------- 1. 분포 ----------
+with tab1:
+    s = st.selectbox("센서", list(SENSORS), format_func=SENSORS.get, key="hist")
+    bins = st.slider("구간 수", 10, 80, 30)
+    fig = px.histogram(df, x=s, color="상태", nbins=bins, barmode="overlay",
+                       histnorm="probability density", opacity=0.6,
+                       color_discrete_map=COLORS, labels={s: SENSORS[s]})
+    for v in df.loc[df[LABEL] == 1, s]:
+        fig.add_vline(x=v, line_width=1, line_dash="dot", line_color=COLORS["결함"])
+    fig.update_layout(yaxis_title="밀도 (클래스별 정규화)")
+    st.plotly_chart(fig)
+    st.caption("점선은 결함 웨이퍼의 실제 값입니다. 결함이 적어서 밀도는 클래스별로 정규화했습니다.")
 
-# ------------------------------------------------------------ 2. 평균 위치
-st.header("2. 결함 웨이퍼의 평균 위치 비교")
-m = Z[y].mean() - Z[~y].mean()
-m = m.sort_values(key=lambda s: s.abs())
-fig, ax = plt.subplots(figsize=(8, 0.6 * len(names) + 1.8))
-ax.barh(m.index, m.values, color=[RED if v > 0 else BLUE for v in m.values])
-ax.axvline(0, color="black", lw=0.8)
-ax.set_xlabel(f"Defect mean - normal mean ({ylabel})   + higher / - lower")
-fig.tight_layout()
-st.pyplot(fig)
-plt.close(fig)
-st.caption("막대가 길수록 결함 웨이퍼와 정상 웨이퍼의 평균 차이가 큰 센서입니다. "
-           "오른쪽(빨강)은 결함에서 더 높고, 왼쪽(파랑)은 더 낮습니다.")
+# ---------- 2. 박스플롯 ----------
+with tab2:
+    cols = st.columns(3)
+    for i, s in enumerate(SENSORS):
+        f = px.box(df, x="상태", y=s, color="상태", points="all",
+                   color_discrete_map=COLORS, labels={s: SENSORS[s]},
+                   category_orders={"상태": ["정상", "결함"]})
+        f.update_layout(showlegend=False, height=320, margin=dict(t=30, b=10),
+                        title=SENSORS[s])
+        f.update_traces(jitter=0.4, marker=dict(size=4))
+        cols[i % 3].plotly_chart(f)
 
-# ------------------------------------------------------------ 3. 두 센서 산점도
-st.header("3. 두 센서 직접 비교 (산점도)")
-c1, c2 = st.columns(2)
-all_cols = list(SENSORS)
-x = c1.selectbox("X축 센서", all_cols, index=1, format_func=KO.get)
-yy = c2.selectbox("Y축 센서", all_cols, index=0, format_func=KO.get)
-fig, ax = plt.subplots(figsize=(7, 5))
-ax.scatter(df.loc[~y, x], df.loc[~y, yy], s=8, color=GRAY, alpha=0.5, label="Normal")
-ax.scatter(df.loc[y, x], df.loc[y, yy], s=70, color=RED, edgecolor="white",
-           zorder=3, label="Defect")
-for _, r in df[y].iterrows():
-    ax.annotate(str(int(r["wafer_id"])) if "wafer_id" in df else "",
-                (r[x], r[yy]), fontsize=7, xytext=(4, 4), textcoords="offset points")
-ax.set_xlabel(EN[x])
-ax.set_ylabel(EN[yy])
-ax.legend()
-fig.tight_layout()
-st.pyplot(fig)
-plt.close(fig)
-st.caption("빨간 점 옆의 숫자는 결함 웨이퍼의 wafer_id입니다. 원래 단위 그대로의 값입니다.")
+# ---------- 3. 산점도 ----------
+with tab3:
+    a, b = st.columns(2)
+    x = a.selectbox("X축", list(SENSORS), index=1, format_func=SENSORS.get)
+    y = b.selectbox("Y축", list(SENSORS), index=0, format_func=SENSORS.get)
+    d = df.sort_values(LABEL)  # 결함 점이 위에 그려지도록
+    fig = px.scatter(d, x=x, y=y, color="상태", color_discrete_map=COLORS,
+                     opacity=0.7, hover_data=["wafer_id"] + (["process_step"] if "process_step" in d else []),
+                     labels={x: SENSORS[x], y: SENSORS[y]})
+    fig.update_traces(marker=dict(size=6))
+    fig.update_traces(selector=dict(name="결함"), marker=dict(size=12, symbol="diamond"))
+    st.plotly_chart(fig)
 
-# ------------------------------------------------------------ 4. 분포 겹쳐 보기
-st.header("4. 두 센서의 분포 겹쳐 보기")
-d1, d2 = st.columns(2)
-a = d1.selectbox("센서 A", all_cols, index=1, format_func=KO.get, key="a")
-b = d2.selectbox("센서 B", all_cols, index=0, format_func=KO.get, key="b")
-ZZ = scale(df[list(SENSORS)])
-fig, axes = plt.subplots(1, 2, figsize=(11, 3.8), sharey=True)
-for ax, s, col in zip(axes, [a, b], [BLUE, "#F58518"]):
-    ax.hist(ZZ.loc[~y, s], bins=30, density=True, color=col, alpha=0.7, label="Normal")
-    for i, v in enumerate(ZZ.loc[y, s]):
-        ax.axvline(v, color=RED, lw=1.2, label="Defect wafer" if i == 0 else None)
-    ax.set_title(EN[s])
-    ax.set_xlabel(ylabel)
-    ax.legend()
-axes[0].set_ylabel("density")
-fig.tight_layout()
-st.pyplot(fig)
-plt.close(fig)
-st.caption("두 센서를 같은 척도로 맞춰 나란히 그렸습니다. 빨간 선은 결함 웨이퍼의 값입니다.")
+# ---------- 4. 압력 구간별 결함률 ----------
+with tab4:
+    s = st.selectbox("센서", list(SENSORS), index=1, format_func=SENSORS.get, key="bin")
+    k = st.slider("분위수 구간 수", 3, 10, 5)
+    q = pd.qcut(df[s], k, duplicates="drop")
+    g = df.groupby(q, observed=True)[LABEL].agg(["count", "sum"]).reset_index()
+    g["결함률(%)"] = g["sum"] / g["count"] * 100
+    g["구간"] = g[s].astype(str)
+    fig = px.bar(g, x="구간", y="결함률(%)", text="sum",
+                 hover_data={"count": True, "sum": True},
+                 labels={"count": "웨이퍼 수", "sum": "결함 수"})
+    fig.update_traces(marker_color=COLORS["결함"], texttemplate="결함 %{text}건")
+    fig.update_layout(xaxis_title=f"{SENSORS[s]} 구간 (낮음 → 높음)")
+    st.plotly_chart(fig)
 
-# ------------------------------------------------------------ 5. 상관 / 프로파일
-st.header("5. 선택한 센서끼리의 관계")
-if len(names) >= 2:
-    corr = Z.corr()
-    fig, ax = plt.subplots(figsize=(0.9 * len(names) + 3, 0.8 * len(names) + 2.5))
-    im = ax.imshow(corr, cmap="RdBu_r", vmin=-1, vmax=1)
-    ax.set_xticks(range(len(names)), names, rotation=45, ha="right")
-    ax.set_yticks(range(len(names)), names)
-    for i in range(len(names)):
-        for j in range(len(names)):
-            ax.text(j, i, f"{corr.iloc[i, j]:.2f}", ha="center", va="center", fontsize=9)
-    fig.colorbar(im, ax=ax, shrink=0.8)
-    ax.set_title("Correlation between sensors")
-    fig.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
-    st.caption("0에 가까우면 두 센서가 거의 무관하고, ±1에 가까울수록 함께(또는 반대로) 움직입니다.")
+# ---------- 5. 센서 비교 / 상관 ----------
+with tab5:
+    rows = []
+    for s in SENSORS:
+        auc = roc_auc_score(df[LABEL], df[s]) if 0 < nd < n else np.nan
+        z = (df.loc[df[LABEL] == 1, s].mean() - df[s].mean()) / df[s].std()
+        rows.append({"센서": SENSORS[s], "단일 AUC": auc,
+                     "결함 평균의 z-score": z,
+                     "방향": "높을수록 결함" if auc > 0.5 else "낮을수록 결함"})
+    t = pd.DataFrame(rows)
+    t["분리도 |AUC-0.5|"] = (t["단일 AUC"] - 0.5).abs()
+    t = t.sort_values("분리도 |AUC-0.5|", ascending=False)
+    l, r = st.columns([1, 1])
+    with l:
+        st.subheader("센서별 결함 구분력")
+        st.dataframe(t.round(3), hide_index=True)
+        st.caption("AUC 0.5 = 구분 못 함, 1에 가까우면 높을수록 결함, 0에 가까우면 낮을수록 결함.")
+    with r:
+        st.subheader("센서 간 상관계수")
+        corr = df[list(SENSORS)].corr().rename(index=SENSORS, columns=SENSORS)
+        st.plotly_chart(px.imshow(corr, text_auto=".2f", zmin=-1, zmax=1,
+                                  color_continuous_scale="RdBu_r"))
 
-    fig, ax = plt.subplots(figsize=(max(6, 1.6 * len(names) + 2), 4))
-    for i in np.where(y)[0]:
-        ax.plot(names, Z.iloc[i].values, color=RED, alpha=0.35, marker="o", ms=4)
-    ax.plot(names, Z[y].mean().values, color=RED, lw=3, marker="o", label="Defect mean")
-    ax.plot(names, Z[~y].mean().values, color=BLUE, lw=2, ls="--", label="Normal mean")
-    ax.set_ylabel(ylabel)
-    ax.set_title("Each defect wafer across the selected sensors")
-    ax.legend()
-    fig.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
-    st.caption("가는 빨간 선은 결함 웨이퍼 1건씩입니다. 선들이 모이는 센서는 결함에서 값이 일관됩니다.")
-else:
-    st.info("2개 이상 선택하면 센서 간 상관관계와 프로파일이 표시됩니다.")
+with st.expander("결함 웨이퍼 원본 데이터"):
+    st.dataframe(df[df[LABEL] == 1].drop(columns="상태"), hide_index=True)
