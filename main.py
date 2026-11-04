@@ -173,3 +173,13 @@ miss = df.drop(columns="상태").isna().sum()
 fig = px.bar(x=miss.index, y=miss.values, labels={"x": "열", "y": "결측 수"})
 fig.update_traces(marker_color="#E45756")
 st.plotly_chart(fig)
+
+st.subheader("열별 값이 채워진 행 수")
+filled = df.drop(columns="상태").count()
+fig = px.bar(x=filled.index, y=filled.values,
+             labels={"x": "열", "y": "값이 있는 행 수"})
+fig.add_hline(y=len(df), line_dash="dot", line_color="#E45756",
+              annotation_text=f"전체 행 수 {len(df):,}")
+fig.update_traces(marker_color="#4C78A8")
+st.plotly_chart(fig)
+st.caption("모든 막대가 점선(전체 행 수)까지 올라오면 결측치가 없습니다. 막대가 짧은 열에 빈 값이 있습니다.")
