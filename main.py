@@ -143,3 +143,27 @@ with tab5:
 
 with st.expander("결함 웨이퍼 원본 데이터"):
     st.dataframe(df[df[LABEL] == 1].drop(columns="상태"), hide_index=True)
+
+# ---------- 6. 결측치 ----------
+with tab6:
+    data = df.drop(columns="상태")
+    miss = data.isna().sum().reset_index()
+    miss.columns = ["열", "결측 수"]
+    miss["결측률(%)"] = miss["결측 수"] / len(data) * 100
+
+    if miss["결측 수"].sum() == 0:
+        st.success("결측치가 없습니다.")
+
+    fig = px.bar(miss, x="열", y="결측률(%)", text="결측 수")
+    fig.update_traces(marker_color="#E45756", texttemplate="%{text}개")
+    fig.update_layout(yaxis_title="결측률 (%)", yaxis_range=[0, max(5, miss["결측률(%)"].max() * 1.2)])
+    st.plotly_chart(fig)
+    st.caption("막대가 높을수록 그 열에 빈 값이 많다는 뜻입니다.")
+
+    st.subheader("결측 위치 (빨간색 = 빈 값)")
+    fig2 = px.imshow(data.isna().astype(int).T, aspect="auto",
+                     color_continuous_scale=[[0, "#dce6f2"], [1, "#E45756"]],
+                     labels={"x": "행 번호", "y": "열"})
+    fig2.update_layout(coloraxis_showscale=False)
+    st.plotly_chart(fig2)
+    st.caption("가로로 길게 빨간 띠가 있으면 그 열이 많이 비어 있고, 세로로 한꺼번에 빨간 줄이 생기면 특정 행에서 여러 센서가 동시에 빠진 것입니다.")
