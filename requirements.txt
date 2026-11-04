@@ -1,5 +1,5 @@
-streamlit==1.50.0
+streamlit>=1.35
 pandas
 numpy
-plotly
 scikit-learn
+matplotlib
