@@ -167,3 +167,9 @@ with tab6:
     fig2.update_layout(coloraxis_showscale=False)
     st.plotly_chart(fig2)
     st.caption("가로로 길게 빨간 띠가 있으면 그 열이 많이 비어 있고, 세로로 한꺼번에 빨간 줄이 생기면 특정 행에서 여러 센서가 동시에 빠진 것입니다.")
+
+st.subheader("열별 결측치 개수")
+miss = df.drop(columns="상태").isna().sum()
+fig = px.bar(x=miss.index, y=miss.values, labels={"x": "열", "y": "결측 수"})
+fig.update_traces(marker_color="#E45756")
+st.plotly_chart(fig)
